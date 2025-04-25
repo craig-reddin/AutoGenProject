@@ -1,0 +1,102 @@
+# ==================== SOCKETIO HANDLERS TESTS ====================
+
+@pytest.fixture
+def socket_client(app):
+    """Create a test client for socketio."""
+    from flask_socketio import SocketIOTestClient
+    from socket_handlers import register_socket_handlers
+    
+    socketio = SocketIO(app)
+    register_socket_handlers(socketio)
+    return SocketIOTestClient(app, socketio)
+
+@patch('socket_handlers.WebSocketUserProxy')
+def test_socket_connect(mock_websocket_proxy, socket_client):
+    """Test socketio connect event."""
+    # Connect to socket
+    socket_client.connect()
+    
+    # Check if connection was successful
+    received = socket_client.get_received()
+    assert len(received) > 0
+    assert received[0]['name'] == 'connection_status'
+    assert received[0]['args'][0]['status'] == 'connected'
+    
+    # Disconnect
+    socket_client.disconnect()
+
+@patch('socket_handlers.WebSocketUserProxy')
+def test_socket_user_message(mock_websocket_proxy, socket_client, mock_autogen):
+    """Test socketio user_message event."""
+    # Setup mock
+    mock_proxy_instance = MagicMock()
+    mock_websocket_proxy.return_value = mock_proxy_instance
+    
+    # Connect and send message
+    socket_client.connect()
+    socket_client.emit('user_message', {'message': 'Test socket message'})
+    
+    # Check if processing started and completed
+    received = socket_client.get_received()
+    status_messages = [msg for msg in received if msg['name'] == 'processing_status']
+    assert len(status_messages) >= 2
+    assert status_messages[0]['args'][0]['status'] == 'started'
+    assert status_messages[-1]['args'][0]['status'] == 'completed'
+    
+    # Verify WebSocketUserProxy was created and used
+    mock_websocket_proxy.assert_called_once()
+    mock_proxy_instance.initiate_chat.assert_called_once()
+    
+    # Disconnect
+    socket_client.disconnect()
+
+@patch('socket_handlers.WebSocketUserProxy')
+@patch('socket_handlers.autogen.AssistantAgent')
+@patch('socket_handlers.autogen.GroupChat')
+@patch('socket_handlers.autogen.GroupChatManager')
+def test_socket_user_message_team(mock_manager, mock_groupchat, mock_assistant, 
+                                 mock_websocket_proxy, socket_client, mock_db_connection):
+    """Test socketio user_message_team event."""
+    # Setup mocks
+    mock_conn, mock_cursor = mock_db_connection
+    mock_proxy_instance = MagicMock()
+    mock_websocket_proxy.return_value = mock_proxy_instance
+    mock_manager_instance = MagicMock()
+    mock_manager.return_value = mock_manager_instance
+    
+    # Set up mock to return agent data
+    mock_cursor.fetchall.return_value = [
+        ('AI Expert', 'You are an AI expert'),
+        ('Coding Expert', 'You are a coding expert'),
+        ('Discussion Manager', 'You are a discussion manager')
+    ]
+    
+    # Connect and send team message
+    socket_client.connect()
+    socket_client.emit('user_message_team', {
+        'message': 'Test team socket message',
+        'agentOne': '1',
+        'agentTwo': '2',
+        'agentThree': '3'
+    })
+    
+    # Check if processing started and completed
+    received = socket_client.get_received()
+    status_messages = [msg for msg in received if msg['name'] == 'processing_status']
+    assert len(status_messages) >= 2
+    assert status_messages[0]['args'][0]['status'] == 'started'
+    assert status_messages[-1]['args'][0]['status'] == 'completed'
+    
+    # Verify mocks were called correctly
+    mock_websocket_proxy.assert_called_once()
+    mock_assistant.assert_called()
+    mock_groupchat.assert_called_once()
+    mock_manager.assert_called_once()
+    mock_proxy_instance.initiate_chat.assert_called_once_with(mock_manager_instance, message='Test team socket message')
+    
+    # Verify session was stored in ACTIVE_SESSIONS
+    session_id = socket_client.sid
+    assert session_id in ACTIVE_SESSIONS
+    
+    # Disconnect and check if session was removed
+    socket_client.disconnect()
