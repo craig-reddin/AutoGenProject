@@ -78,7 +78,8 @@ Installation
 Clone the repository:
 
 git clone https://github.com/craig-reddin/AutoGenProject.git
-cd GenAIColab
+
+cd AutoGenProject'
 
 Install dependencies
 
