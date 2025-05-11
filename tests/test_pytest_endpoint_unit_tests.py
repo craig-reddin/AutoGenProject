@@ -10,7 +10,7 @@ def client():
     #Create a test client for the app
     #Configure flask app into Testing mode for testing functionality.
     app.config['TESTING'] = True
-    #Simulate the client
+    #Mock the client
     with app.test_client() as client:
         yield client
 
@@ -174,7 +174,7 @@ def test_gather_previous_chat_names(client, mock_db_connection):
     mock_conn, mock_cursor = mock_db_connection
     
     # Set up mock to return chat names
-    mock_cursor.fetchall.return_value = [('Chat 1',), ('Chat 2',)]
+    mock_cursor.fetchall.return_value = [(['Chat 1', '01']), ('Chat 2', '02')]
     
     response = client.post('/gather_previous_chat_names', 
                           data=json.dumps({'email': 'test@ncirl.ie'}),
@@ -506,6 +506,4 @@ def test_gather_teams_none_found(client, mock_db_connection):
     # Verify response contains error message
     assert response.status_code == 200
     data = json.loads(response.data)
-    assert "<div id='previous_chat_error'><h1 id='returned_data'>"
-    +"Error fetching chat data</h1><br /><h3 id='previous_chat_error_sub'>"
-    +"Please try again later</h3></div>" in data['message']
+    assert "<div id='previous_chat_error'><h1 id='returned_data'>Error fetching chat data</h1><br /><h3 id='previous_chat_error_sub'>Please try again later</h3></div>" in data['message']

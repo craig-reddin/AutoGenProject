@@ -16,11 +16,11 @@ DATABASE_PORT = os.getenv('DATABASE_PORT')
 # Agent configuration
 LLM_CONFIG = {
     # Temperature determines the creativity of response
-    "temperature": 0,
+    "temperature": 0.5,
     # Config list to pass agent model and api key
     "config_list": [{"model": 'gpt-4o', 'api_key': OPENAIKEY}],
-    # Currently set to none - will configure according after testing
-    "timeout": None,
+    # timeout in second
+    "timeout": 120,
 }
 
 # Track active chat sessions - used for websockets

@@ -8,14 +8,14 @@ from agents import agent_one
 # Used to troublshoot websockets
 import traceback
 
-def register_socket_handlers(socket_io): # socket_io is the initialised instance
+def register_socket_handlers(socket_io): # socket_io is the initialised instance in app.py
 
     #Called when websocket connection is made
     @socket_io.on('connect')
     def handle_connect():
         #Used for troubleshooting
         print(f"Client connected: {request.sid}")
-        socket_io.emit('connection_status', {'status': 'connected', 'session_id': request.sid}, room=request.sid) # Emit only to the connecting client
+        socket_io.emit('connection_status', {'status': 'connected', 'session_id': request.sid}, room=request.sid) # Emit to the connecting client
 
     #Called when websocket is disconnected
     @socket_io.on('disconnect')
@@ -23,60 +23,152 @@ def register_socket_handlers(socket_io): # socket_io is the initialised instance
          #Used for troubleshooting
          print(f"Client disconnected: {request.sid}")
          #check and ensure the request sid is removed from Active Session {}.
+         #Had issues reconnecting to websocket when ititial connection is diconnected and then try reconnecting
          if request.sid in ACTIVE_SESSIONS:
             del ACTIVE_SESSIONS[request.sid]
             print(f"Session {request.sid} removed from active sessions.")
 
+    def get_or_create_session_agents(session_id):
+        #Retrieves or creates agents for given Socketio session id
+        if session_id not in ACTIVE_SESSIONS:
+            print(f"Creating new agents for session: {session_id}")
 
-    #Called on event called user message - client sends message with even called user_message
-    @socket_io.on('user_message')
-    def handle_message(data):
-        #User for troubleshooting
-        print(f"Received message from {request.sid}: {data['message']}")
-        session_id = request.sid
-
-        try:
-            #extract the message from the payload
-            message = data['message']
-
-            # Create the WebSocketUserProxy witht the overriden receive method.
-            socket_user_proxy = WebSocketUserProxy(
-                #pass the websocket session id
+            # Create the WebSocketUserProxy instance
+            user_proxy = WebSocketUserProxy(
                 session_id=session_id,
-                #pass the socket
-                socketio_instance=socket_io, # Pass the correct socket_io object
-                #Pass the name
-                name="User_proxy",
+                socketio_instance=socket_io,
+                name="User_Proxy",
+                system_message="You are the user proxy. Relay messages clearly.",
                 
                 human_input_mode="NEVER",
-                
-                max_consecutive_auto_reply=2,
-                
+                # max_consecutive_auto_reply=1, # Often set low for turn-based
                 code_execution_config={
-                    
-                    "use_docker" : False,
-                    # directory for files to be saved   
-                    "work_dir": "groupchat",                 
+                    "work_dir": "groupchat", 
+                    "use_docker": False,
                 },
+                # Check if the message content ends with TERMINATE
+                is_termination_msg=lambda x: isinstance(x, dict) and x.get("content", "").rstrip().endswith("TERMINATE"),
             )
 
-            # Send acknowledgment - leveraged on the react front end using event listener
-            socket_io.emit('processing_status', {'status': 'started'}, room=session_id)
+            # Autogen Assistant Agent
+            assistant = autogen.AssistantAgent(
+                name="MultiTalentAgent",
+                system_message="You are a helpful AI assistant. Generate a concise and relevant response based *only* on the most recent user message in the conversation history. Do not repeat or append previous responses unless specifically asked to summarize. Reply with TERMINATE when the task is fully complete.",
+                llm_config=LLM_CONFIG,
+            )
+            ACTIVE_SESSIONS[session_id] = {
+                "user_proxy": user_proxy,
+                "assistant": assistant,
+            }
+            print(f"Agents created for session {session_id}")
+        else:
+            print(f"Using existing agents for session: {session_id}")
+        return ACTIVE_SESSIONS[session_id]["user_proxy"], ACTIVE_SESSIONS[session_id]["assistant"]
 
-            # Initiate chat - pass single agent and message
-            socket_user_proxy.initiate_chat(agent_one, message=message)
+    # Called on user message - client sends message with event called user_message
+    @socket_io.on('user_message')
+    def handle_user_message(data):
+        session_id = request.sid
+        print(f"Received message from {session_id}: {data.get('message')}")
 
-            # Send completion status
-            socket_io.emit('processing_status', {'status': 'completed'}, room=session_id)
+        try:
+            user_input = data.get('message')
+            if not user_input:
+                socket_io.emit('error', {'error': 'No message content provided'}, room=session_id)
+                return
+
+            # Get agents for this session
+            if session_id not in ACTIVE_SESSIONS:
+                print(f"ERROR: No agents found for session {session_id}. Re-initializing.")
+                get_or_create_session_agents(session_id) # Attempt re-initialization
+
+            user_proxy, assistant = ACTIVE_SESSIONS[session_id]["user_proxy"], ACTIVE_SESSIONS[session_id]["assistant"]
+
+            socket_io.emit('processing_status', {'status': 'processing'}, room=session_id)
+
+            # Add user message to the assistant's chat history with the proxy
+            # This ensures the assistant knows about the latest input.
+            # Manipulate the assistants message storage.
+            assistant.chat_messages.setdefault(user_proxy, []).append(
+                {"role": "user", "content": user_input}
+            )
+            # Add to proxy history
+            user_proxy.chat_messages.setdefault(assistant, []).append(
+                {"role": "user", "content": user_input} 
+            )
+
+
+            # Generate the reply using the assistants updayed history
+            assistant_reply = assistant.generate_reply(
+                # proxy messages 
+                messages=assistant.chat_messages[user_proxy],
+                # Identify the sender for context
+                sender=user_proxy, 
+                config=LLM_CONFIG 
+            )
+
+            # Send the assistant's reply to the user proxy.
+            # The proxy's overridden receive method will handle emitting it.
+            user_proxy.receive( 
+                message=assistant_reply,
+                sender=assistant,
+                request_reply=False
+            )
+            # The super().receive call inside WebSocketUserProxy.receive will handle
+            # adding the assistant's reply to the proxys history.
+
+            #Check for termination based on the assistant's reply
+            is_terminate = user_proxy._is_termination_msg(assistant_reply)
+            
+            status_message = 'completed_terminated' if is_terminate else 'completed_waiting_next'
+            socket_io.emit('processing_status', {'status': status_message}, room=session_id)
+            if is_terminate:
+                print(f"Termination message {session_id}")
 
 
         except Exception as e:
-            print(f"Error processing message: {str(e)}")
-            
+            print(f"Error processing message {session_id}: {str(e)}")
             traceback.print_exc()
-            # Ensure session_id is defined even in exceptions
-            socket_io.emit('error', {'error': str(e)}, room=session_id)
-            # return {'status': 'error', 'message': str(e)} # Optional return
+            socket_io.emit('error', {'error': f"An error occurred: {str(e)}"}, room=session_id)
+            socket_io.emit('processing_status', {'status': 'error'}, room=session_id) 
+
+        def handle_user_message(data):
+            session_id = request.sid
+            print(f"Received message from {session_id}: {data.get('message')}")
+
+            try:
+                user_input = data.get('message')
+                if not user_input:
+                    socket_io.emit('error', {'error': 'No message content provided'}, room=session_id)
+                    return
+
+                # Get or create agents for this specific session
+                user_proxy, assistant = get_or_create_session_agents(session_id)
+
+                # Emit processing status once
+                socket_io.emit('processing_status', {'status': 'processing'}, room=session_id)
+
+                # Use the user_proxy to send the message To the assistant.
+                user_proxy.send(
+                    message=user_input,
+                    recipient=assistant,
+                    request_reply=True,
+                    silent=False,
+                )
+
+                # Check if the last message received by the proxy was a termination message
+                last_msg = user_proxy.last_message(assistant)
+                if user_proxy._is_termination_msg(last_msg):
+                    print(f"Termination message detected for session {session_id}")
+                    socket_io.emit('processing_status', {'status': 'completed_terminated'}, room=session_id)
+                else:
+                    socket_io.emit('processing_status', {'status': 'completed_waiting_next'}, room=session_id)
+
+            except Exception as e:
+                print(f"Error processing message for session {session_id}: {str(e)}")
+                traceback.print_exc()
+                socket_io.emit('error', {'error': f"An internal error occurred: {str(e)}"}, room=session_id)
+                socket_io.emit('processing_status', {'status': 'error'}, room=session_id)
 
 
     @socket_io.on('user_message_team')
@@ -90,7 +182,6 @@ def register_socket_handlers(socket_io): # socket_io is the initialised instance
             agentOneId = data.get('agentOne')
             agentTwoId = data.get('agentTwo')
             agentThreeId = data.get('agentThree')
-            print("Hello")
             
             # Send acknowledgment
             socket_io.emit('processing_status', {'status': 'started'}, room=session_id)
@@ -121,7 +212,7 @@ def register_socket_handlers(socket_io): # socket_io is the initialised instance
             finally:
                 conn.close()
 
-
+            #verify 3 agents are returned 
             if len(result) == 3:
                 #Unpack the results
                 (specialisationOne, configOne), (specialisationTwo, configTwo), (specialisationThree, configThree) = result
@@ -173,7 +264,7 @@ def register_socket_handlers(socket_io): # socket_io is the initialised instance
             manager = session_data['manager']
 
             # Initiate the chat
-            # The user_proxy will use its stored self.socket_io to emit messages when its receive method is called
+            # The user_proxy will use self.socket_io to emit messages when its receive method is called
             user_proxy.initiate_chat(manager, message=message)
 
             # Send completion status
@@ -181,6 +272,5 @@ def register_socket_handlers(socket_io): # socket_io is the initialised instance
 
         except Exception as e:
             print(f"Error processing team message: {str(e)}")
-            traceback.print_exc()
             #Emmit error if one occurs
             socket_io.emit('error', {'error': str(e)}, room=session_id)

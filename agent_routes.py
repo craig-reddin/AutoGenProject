@@ -24,7 +24,7 @@ def create_agent():
             "INSERT INTO agentdata (useremail, agentspecialisation, agentconfig, temperature, userintervention) VALUES (%s, %s, %s, %s, %s)",
             (email, specialisation, prompt, 0.0, False)
         )
-
+        
         #commit transaction
         conn.commit()
         #close the curson
@@ -51,12 +51,13 @@ def retrieve_agents():
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT agentspecialisation, agentconfig, agentid FROM agentdata WHERE useremail = %s", 
+            "SELECT agentspecialisation, agentconfig, agentid FROM agentdata WHERE useremail = %s OR useremail = 'system@example.com'", 
             (email,)
         )
         #fetch all used for gathering all agents associated with the passed email
         result = cursor.fetchall()
         #format the result for extraction on the client side
+        #https://www.geeksforgeeks.org/nested-list-comprehensions-in-python/
         formatted_result = [[[agentspecialisation], [agentconfig], [agentid]] for agentspecialisation, agentconfig, agentid in result]
 
         #   if the no result retrun - return html content (stlyed when rendered in) - Understood this is dangerous now since learning of xss in secure app dev

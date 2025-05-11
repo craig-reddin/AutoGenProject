@@ -1,0 +1,28 @@
+
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>User Management</title>
+        <link rel="stylesheet" href="style.css">
+        <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+        <script defer src="script.js"></script>
+    </head>
+    <body>
+        <h1>User Management</h1>
+        <form id="userForm">
+            <input type="hidden" id="userId">
+            <input type="text" id="name" placeholder="Name" required>
+            <input type="number" id="age" placeholder="Age" min="0" required>
+            <input type="number" id="balance" placeholder="Balance" min="0" required>
+            <button type="button" id="createUser">Create User</button>
+            <button type="button" id="updateUser" style="display:none;">Update User</button>
+            <button type="button" id="clearForm">Clear Form</button>
+            <button type="button" id="loadUsers">Load Users</button>
+        </form>
+        <div id="status"></div>
+        <ul id="userList"></ul>
+    </body>
+    </html>
+    
