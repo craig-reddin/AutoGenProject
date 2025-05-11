@@ -4,6 +4,7 @@
 /endpoints/
 /tools/
 /groupchat/
-gen.py
-private_key.pem
-public_key.pem
+/code_examples_generated/
+/app/
+.pytest_cache
+
